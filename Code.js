@@ -40,9 +40,10 @@ function listerFichiersPdf() {
   ss.setActiveSheet(sheet);
 
   // 1. Récupération du dossier source
+  const folderConfig = getFolderConfig();
   let dossierSource;
   try {
-    dossierSource = getFolder(CONFIG.FOLDER_INPUT);
+    dossierSource = getFolder(folderConfig.FOLDER_INPUT);
   } catch (error) {
     ui.alert("Dossier introuvable", error.message, ui.ButtonSet.OK);
     return;
@@ -79,7 +80,7 @@ function listerFichiersPdf() {
     formatSheetHeaders(sheet);
     ui.alert(
       "Aucun PDF trouvé",
-      `Le dossier "${CONFIG.FOLDER_INPUT}" est vide ou ne contient aucun fichier PDF.`,
+      `Le dossier "${folderConfig.FOLDER_INPUT}" est vide ou ne contient aucun fichier PDF.`,
       ui.ButtonSet.OK
     );
     return;
@@ -168,9 +169,10 @@ async function pivoterPdfDepuisTableau() {
   }
 
   // Récupération ou création du dossier de destination "Traités"
+  const folderConfig = getFolderConfig();
   let dossierSource;
   try {
-    dossierSource = getFolder(CONFIG.FOLDER_INPUT);
+    dossierSource = getFolder(folderConfig.FOLDER_INPUT);
   } catch (error) {
     ui.alert("Dossier source introuvable", error.message, ui.ButtonSet.OK);
     return;
@@ -181,7 +183,7 @@ async function pivoterPdfDepuisTableau() {
   if (parents.hasNext()) {
     dossierParent = parents.next();
   }
-  const dossierDest = getOrCreateFolder(CONFIG.FOLDER_OUTPUT, dossierParent);
+  const dossierDest = getOrCreateFolder(folderConfig.FOLDER_OUTPUT, dossierParent);
 
   // Chargement de la bibliothèque PDF
   spreadsheet.toast("Chargement du moteur de rotation PDF...", "🔄 Initialisation", 5);
@@ -236,7 +238,7 @@ async function pivoterPdfDepuisTableau() {
 
   spreadsheet.toast("Traitement terminé !", "✅ Terminé", 3);
 
-  let messageBilan = `${compteurSucces} PDF ont été pivotés et enregistrés dans le dossier "${CONFIG.FOLDER_OUTPUT}".`;
+  let messageBilan = `${compteurSucces} PDF ont été pivotés et enregistrés dans le dossier "${folderConfig.FOLDER_OUTPUT}".`;
   if (compteurErreur > 0) {
     messageBilan += `\n\n⚠️ Attention : ${compteurErreur} fichier(s) ont rencontré une erreur. Vérifiez les statuts dans le tableau.`;
   }
@@ -482,12 +484,13 @@ function afficherAide() {
         <h2>💡 Comment fonctionne le Moteur PDF ?</h2>
         <p>Ce script permet de faire pivoter plusieurs fichiers PDF à des angles différents directement depuis cette feuille Google Sheets.</p>
         <ol>
-          <li>Déposez vos fichiers PDF à pivoter dans le dossier Google Drive nommé <span class="folder">À pivoter</span>.</li>
-          <li>Dans le menu <b>🔄 Moteur PDF</b>, sélectionnez <b>1. Lister les PDF...</b>. Cela crée l'onglet <span class="folder">Rotation PDF</span> et y liste tous les fichiers en attente.</li>
-          <li>Dans la colonne <b>Angle de rotation</b>, choisissez l'angle pour chaque fichier (<b>90</b>, <b>180</b> ou <b>270</b>) grâce à la liste déroulante. <i>(Laissez vide si vous ne voulez pas traiter le fichier immédiatement)</i>.</li>
-          <li>Une fois les angles définis, sélectionnez <b>2. Pivoter les PDF...</b> dans le menu pour lancer la rotation en arrière-plan.</li>
+          <li>Configurez le nom de vos dossiers Drive dans l'onglet <span class="folder">Configuration</span> (par défaut : <span class="folder">À pivoter</span> et <span class="folder">Traités</span>).</li>
+          <li>Déposez vos PDF dans votre dossier source.</li>
+          <li>Sélectionnez <b>1. Lister les PDF...</b> dans le menu <b>🔄 Moteur PDF</b>. Cela crée l'onglet <span class="folder">Rotation PDF</span> et liste les fichiers en attente.</li>
+          <li>Dans la colonne <b>Angle de rotation</b>, choisissez l'angle pour chaque fichier (<b>90</b>, <b>180</b> ou <b>270</b>).</li>
+          <li>Sélectionnez <b>2. Pivoter les PDF...</b> pour lancer le traitement.</li>
         </ol>
-        <p>Les fichiers modifiés seront enregistrés dans le dossier <span class="folder">Traités</span> (créé automatiquement au même niveau que le dossier source) et les originaux seront envoyés à la corbeille de votre Drive.</p>
+        <p>Les fichiers modifiés seront enregistrés dans votre dossier cible et les originaux seront envoyés à la corbeille de votre Drive.</p>
         <div class="footer">
           Assistant de Rotation PDF v2.0 - Professionnel & Automatisé
         </div>
@@ -694,4 +697,72 @@ function updateActiveRowAngle(angle) {
       cell.setValue(angle);
     }
   }
+}
+
+/**
+ * Récupère la configuration des dossiers depuis l'onglet "Configuration".
+ * Si l'onglet n'existe pas, il est créé avec les valeurs par défaut.
+ * 
+ * @returns {{FOLDER_INPUT: string, FOLDER_OUTPUT: string}}
+ */
+function getFolderConfig() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName("Configuration");
+  
+  const defaults = {
+    FOLDER_INPUT: "À pivoter",
+    FOLDER_OUTPUT: "Traités"
+  };
+  
+  if (!sheet) {
+    sheet = ss.insertSheet("Configuration");
+    
+    // Formater l'onglet Configuration
+    sheet.getRange("A1:C1").setValues([["Paramètre", "Valeur", "Description"]])
+         .setFontWeight("bold")
+         .setBackground("#2c3e50")
+         .setFontColor("#ffffff")
+         .setHorizontalAlignment("center")
+         .setVerticalAlignment("middle");
+         
+    sheet.setRowHeight(1, 26);
+    sheet.setRowHeights(2, 2, 22);
+    
+    sheet.getRange("A2:C3").setValues([
+      ["Dossier Source", defaults.FOLDER_INPUT, "Nom du dossier Google Drive contenant les fichiers PDF à traiter"],
+      ["Dossier Cible", defaults.FOLDER_OUTPUT, "Nom du dossier Google Drive où enregistrer les fichiers pivotés"]
+    ]);
+    
+    // Alignements et styles
+    sheet.getRange("A2:C3").setVerticalAlignment("middle");
+    sheet.getRange("A2:A3").setFontWeight("bold").setHorizontalAlignment("left");
+    sheet.getRange("B2:B3").setHorizontalAlignment("left");
+    sheet.getRange("C2:C3").setFontColor("#5f6368").setHorizontalAlignment("left");
+    
+    sheet.autoResizeColumn(1);
+    sheet.autoResizeColumn(2);
+    sheet.autoResizeColumn(3);
+  }
+  
+  // Lire les valeurs
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return defaults;
+  }
+  
+  const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  const config = { ...defaults };
+  
+  for (let i = 0; i < values.length; i++) {
+    const key = String(values[i][0]).trim().toLowerCase();
+    const val = String(values[i][1]).trim();
+    
+    if (key === "dossier source" && val !== "") {
+      config.FOLDER_INPUT = val;
+    } else if (key === "dossier cible" && val !== "") {
+      config.FOLDER_OUTPUT = val;
+    }
+  }
+  
+  return config;
 }
