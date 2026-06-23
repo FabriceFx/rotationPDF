@@ -43,7 +43,7 @@ function listerFichiersPdf() {
   const folderConfig = getFolderConfig();
   let dossierSource;
   try {
-    dossierSource = getFolder(folderConfig.FOLDER_INPUT);
+    dossierSource = getFolderByConfig(folderConfig.FOLDER_INPUT, "Dossier Source");
   } catch (error) {
     ui.alert("Dossier introuvable", error.message, ui.ButtonSet.OK);
     return;
@@ -80,7 +80,7 @@ function listerFichiersPdf() {
     formatSheetHeaders(sheet);
     ui.alert(
       "Aucun PDF trouvé",
-      `Le dossier "${folderConfig.FOLDER_INPUT}" est vide ou ne contient aucun fichier PDF.`,
+      `Le dossier "${dossierSource.getName()}" est vide ou ne contient aucun fichier PDF.`,
       ui.ButtonSet.OK
     );
     return;
@@ -172,7 +172,7 @@ async function pivoterPdfDepuisTableau() {
   const folderConfig = getFolderConfig();
   let dossierSource;
   try {
-    dossierSource = getFolder(folderConfig.FOLDER_INPUT);
+    dossierSource = getFolderByConfig(folderConfig.FOLDER_INPUT, "Dossier Source");
   } catch (error) {
     ui.alert("Dossier source introuvable", error.message, ui.ButtonSet.OK);
     return;
@@ -183,7 +183,14 @@ async function pivoterPdfDepuisTableau() {
   if (parents.hasNext()) {
     dossierParent = parents.next();
   }
-  const dossierDest = getOrCreateFolder(folderConfig.FOLDER_OUTPUT, dossierParent);
+  
+  let dossierDest;
+  try {
+    dossierDest = getTargetFolderByConfig(folderConfig.FOLDER_OUTPUT, dossierParent);
+  } catch (error) {
+    ui.alert("Dossier cible introuvable", error.message, ui.ButtonSet.OK);
+    return;
+  }
 
   // Chargement de la bibliothèque PDF
   spreadsheet.toast("Chargement du moteur de rotation PDF...", "🔄 Initialisation", 5);
@@ -238,7 +245,7 @@ async function pivoterPdfDepuisTableau() {
 
   spreadsheet.toast("Traitement terminé !", "✅ Terminé", 3);
 
-  let messageBilan = `${compteurSucces} PDF ont été pivotés et enregistrés dans le dossier "${folderConfig.FOLDER_OUTPUT}".`;
+  let messageBilan = `${compteurSucces} PDF ont été pivotés et enregistrés dans le dossier "${dossierDest.getName()}".`;
   if (compteurErreur > 0) {
     messageBilan += `\n\n⚠️ Attention : ${compteurErreur} fichier(s) ont rencontré une erreur. Vérifiez les statuts dans le tableau.`;
   }
@@ -484,7 +491,7 @@ function afficherAide() {
         <h2>💡 Comment fonctionne le Moteur PDF ?</h2>
         <p>Ce script permet de faire pivoter plusieurs fichiers PDF à des angles différents directement depuis cette feuille Google Sheets.</p>
         <ol>
-          <li>Configurez le nom de vos dossiers Drive dans l'onglet <span class="folder">Configuration</span> (par défaut : <span class="folder">À pivoter</span> et <span class="folder">Traités</span>).</li>
+          <li>Configurez les **identifiants (IDs)** ou les noms de vos dossiers Drive dans l'onglet <span class="folder">Configuration</span> (par défaut, le script recherche les dossiers <span class="folder">À pivoter</span> et <span class="folder">Traités</span> et y inscrit automatiquement leurs IDs).</li>
           <li>Déposez vos PDF dans votre dossier source.</li>
           <li>Sélectionnez <b>1. Lister les PDF...</b> dans le menu <b>🔄 Moteur PDF</b>. Cela crée l'onglet <span class="folder">Rotation PDF</span> et liste les fichiers en attente.</li>
           <li>Dans la colonne <b>Angle de rotation</b>, choisissez l'angle pour chaque fichier (<b>90</b>, <b>180</b> ou <b>270</b>).</li>
@@ -705,6 +712,12 @@ function updateActiveRowAngle(angle) {
  * 
  * @returns {{FOLDER_INPUT: string, FOLDER_OUTPUT: string}}
  */
+/**
+ * Récupère la configuration des dossiers depuis l'onglet "Configuration".
+ * Si l'onglet n'existe pas, il est créé avec les valeurs par défaut.
+ * 
+ * @returns {{FOLDER_INPUT: string, FOLDER_OUTPUT: string}}
+ */
 function getFolderConfig() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName("Configuration");
@@ -718,7 +731,7 @@ function getFolderConfig() {
     sheet = ss.insertSheet("Configuration");
     
     // Formater l'onglet Configuration
-    sheet.getRange("A1:C1").setValues([["Paramètre", "Valeur", "Description"]])
+    sheet.getRange("A1:C1").setValues([["Paramètre", "Valeur (ID ou Nom du dossier)", "Description"]])
          .setFontWeight("bold")
          .setBackground("#2c3e50")
          .setFontColor("#ffffff")
@@ -729,8 +742,8 @@ function getFolderConfig() {
     sheet.setRowHeights(2, 2, 22);
     
     sheet.getRange("A2:C3").setValues([
-      ["Dossier Source", defaults.FOLDER_INPUT, "Nom du dossier Google Drive contenant les fichiers PDF à traiter"],
-      ["Dossier Cible", defaults.FOLDER_OUTPUT, "Nom du dossier Google Drive où enregistrer les fichiers pivotés"]
+      ["Dossier Source", defaults.FOLDER_INPUT, "Identifiant (ID) ou nom du dossier Google Drive contenant les fichiers PDF à traiter"],
+      ["Dossier Cible", defaults.FOLDER_OUTPUT, "Identifiant (ID) ou nom du dossier Google Drive où enregistrer les fichiers pivotés"]
     ]);
     
     // Alignements et styles
@@ -765,4 +778,126 @@ function getFolderConfig() {
   }
   
   return config;
+}
+
+/**
+ * Récupère un dossier Google Drive par son ID ou, à défaut, par son nom.
+ * Si le dossier est trouvé par nom et que l'ID n'était pas renseigné, 
+ * l'ID est écrit dans la cellule de configuration correspondante.
+ * 
+ * @param {string} idOrName - L'identifiant ou le nom du dossier.
+ * @param {string} configKey - La clé de configuration ("Dossier Source" ou "Dossier Cible").
+ * @returns {GoogleAppsScript.Drive.Folder} Le dossier trouvé.
+ */
+function getFolderByConfig(idOrName, configKey) {
+  idOrName = String(idOrName).trim();
+  
+  if (idOrName === "") {
+    throw new Error(`L'identifiant ou le nom du dossier pour "${configKey}" est vide.`);
+  }
+
+  // 1. Tenter d'ouvrir par ID (si la chaîne ressemble à un ID Drive)
+  if (idOrName.length > 20 && !idOrName.includes(" ")) {
+    try {
+      return DriveApp.getFolderById(idOrName);
+    } catch (e) {
+      throw new Error(`Impossible d'accéder au dossier avec l'ID "${idOrName}". Vérifiez qu'il existe et que vous y avez accès. (Détail: ${e.message})`);
+    }
+  }
+
+  // 2. Recherche par nom (Fallback héritage ou initialisation)
+  const dossiers = DriveApp.getFoldersByName(idOrName);
+  if (!dossiers.hasNext()) {
+    throw new Error(
+      `Impossible de trouver un dossier nommé "${idOrName}" ou avec cet ID dans votre Google Drive.\n\n` +
+      `Veuillez saisir un ID de dossier Google Drive valide dans l'onglet 'Configuration'.`
+    );
+  }
+  
+  const dossier = dossiers.next();
+  
+  // Tenter d'écrire l'ID dans la feuille de configuration pour simplifier la vie de l'utilisateur
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName("Configuration");
+    if (sheet) {
+      const lastRow = sheet.getLastRow();
+      if (lastRow >= 2) {
+        const range = sheet.getRange(2, 1, lastRow - 1, 2);
+        const values = range.getValues();
+        for (let i = 0; i < values.length; i++) {
+          if (String(values[i][0]).trim().toLowerCase() === configKey.toLowerCase()) {
+            sheet.getRange(i + 2, 2).setValue(dossier.getId());
+            break;
+          }
+        }
+      }
+    }
+  } catch (writeError) {
+    console.warn("Impossible de sauvegarder l'ID automatiquement : " + writeError.message);
+  }
+
+  return dossier;
+}
+
+/**
+ * Récupère ou crée le dossier cible par son ID ou son nom.
+ * 
+ * @param {string} idOrName - L'identifiant ou le nom du dossier cible.
+ * @param {GoogleAppsScript.Drive.Folder} parentFolder - Le dossier parent pour la création éventuelle si recherche par nom.
+ * @returns {GoogleAppsScript.Drive.Folder} Le dossier cible.
+ */
+function getTargetFolderByConfig(idOrName, parentFolder) {
+  idOrName = String(idOrName).trim();
+  
+  if (idOrName === "") {
+    idOrName = "Traités"; // Fallback par défaut
+  }
+
+  // 1. Tenter d'ouvrir par ID
+  if (idOrName.length > 20 && !idOrName.includes(" ")) {
+    try {
+      return DriveApp.getFolderById(idOrName);
+    } catch (e) {
+      throw new Error(`Impossible d'accéder au dossier cible avec l'ID "${idOrName}". (Détail: ${e.message})`);
+    }
+  }
+
+  // 2. Recherche ou création par nom
+  const dossiers = parentFolder
+    ? parentFolder.getFoldersByName(idOrName)
+    : DriveApp.getFoldersByName(idOrName);
+
+  let dossier;
+  if (dossiers.hasNext()) {
+    dossier = dossiers.next();
+  } else {
+    dossier = parentFolder
+      ? parentFolder.createFolder(idOrName)
+      : DriveApp.createFolder(idOrName);
+  }
+
+  // Tenter d'écrire l'ID généré/trouvé dans la feuille de configuration
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName("Configuration");
+    if (sheet) {
+      const lastRow = sheet.getLastRow();
+      if (lastRow >= 2) {
+        const range = sheet.getRange(2, 1, lastRow - 1, 2);
+        const values = range.getValues();
+        for (let i = 0; i < values.length; i++) {
+          const key = String(values[i][0]).trim().toLowerCase();
+          if (key === "dossier cible") {
+            sheet.getRange(i + 2, 2).setValue(dossier.getId());
+            break;
+          }
+        }
+      }
+    }
+  } catch (writeError) {
+    console.warn("Impossible de sauvegarder l'ID automatiquement : " + writeError.message);
+  }
+
+  return dossier;
 }
