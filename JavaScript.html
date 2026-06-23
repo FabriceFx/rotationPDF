@@ -1,0 +1,242 @@
+<script>
+  // 1. Récupération de la locale injectée par le serveur (défaut : 'en')
+  const USER_LOCALE = "<?!= locale ?>".toLowerCase().startsWith('fr') ? 'fr' : 'en';
+
+  // 2. Dictionnaire de traduction global de l'application (Sentence case en français)
+  const TRANSLATIONS = {
+    fr: {
+      headerTitleSpan: "Moteur PDF - Aperçu",
+      headerSubtitle: "Prévisualisation et rotation de vos documents",
+      txt-docNameTitle: "Informations du document",
+      txt-labelFileName: "Nom du fichier",
+      txt-labelStatus: "Statut",
+      txt-controlsTitle: "Choisir l'angle de rotation",
+      txt-btnSave: "Appliquer l'angle",
+      txt-noSelectionMessage: "Sélectionnez une ligne contenant un fichier PDF dans le tableau de bord pour afficher l'aperçu et le faire pivoter.",
+      txt-overlayLoading: "Chargement...",
+      msgSaveSuccess: "✅ Angle appliqué avec succès !",
+      msgSaveError: "❌ Erreur lors de l'enregistrement de l'angle",
+      msgApiError: "❌ Erreur de communication avec le serveur",
+      txt-footerHelp: "Aide",
+      suggestionText: "💡 Recommandé : ",
+      suggestionApply: "(Appliquer)"
+    },
+    en: {
+      headerTitleSpan: "PDF Engine - Preview",
+      headerSubtitle: "Preview and rotate your documents",
+      "txt-docNameTitle": "Document information",
+      "txt-labelFileName": "File name",
+      "txt-labelStatus": "Status",
+      "txt-controlsTitle": "Select rotation angle",
+      "txt-btnSave": "Apply angle",
+      "txt-noSelectionMessage": "Select a row containing a PDF file in the dashboard to show the preview and rotate it.",
+      "txt-overlayLoading": "Loading...",
+      msgSaveSuccess: "✅ Angle applied successfully!",
+      msgSaveError: "❌ Error while saving the angle",
+      msgApiError: "❌ Communication error with the server",
+      "txt-footerHelp": "Help",
+      suggestionText: "💡 Recommended: ",
+      suggestionApply: "(Apply)"
+    }
+  };
+
+  // Raccourci pour obtenir une traduction
+  function getTxt(key) {
+    return TRANSLATIONS[USER_LOCALE][key] || TRANSLATIONS['en'][key] || key;
+  }
+
+  let currentFileId = null;
+  let selectedAngle = 0;
+  let sheetAngle = ""; // L'angle actuellement écrit dans Sheets
+  let physicalRotation = 0; // La rotation physique interne du PDF
+
+  // Initialisation
+  document.addEventListener('DOMContentLoaded', () => {
+    applyTranslations();
+    setupEventListeners();
+    // Lancer la détection automatique de changement de cellule
+    setInterval(checkActiveCell, 1500);
+    checkActiveCell(); // Lancement immédiat
+  });
+
+  // Applique les traductions dynamiquement aux éléments HTML ayant des IDs correspondants
+  function applyTranslations() {
+    const textElements = [
+      'headerTitleSpan', 'headerSubtitle', 'txt-docNameTitle', 
+      'txt-labelFileName', 'txt-labelStatus', 'txt-controlsTitle', 
+      'txt-btnSave', 'txt-noSelectionMessage', 'txt-overlayLoading', 
+      'txt-footerHelp'
+    ];
+    
+    textElements.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.textContent = getTxt(id);
+      }
+    });
+  }
+
+  function setupEventListeners() {
+    const angleButtons = document.querySelectorAll('.btn-angle');
+    angleButtons.forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const angle = parseInt(e.target.getAttribute('data-angle'), 10);
+        selectAngle(angle);
+      });
+    });
+
+    const saveButton = document.getElementById('save-btn');
+    saveButton.addEventListener('click', saveAngleToSheet);
+  }
+
+  // Appelé à intervalle régulier pour sonder l'état de Google Sheets (silencieux)
+  function checkActiveCell() {
+    google.script.run
+      .withSuccessHandler(onFileDetailsLoaded)
+      .withFailureHandler(onApiError)
+      .getActiveFileDetails();
+  }
+
+  function onFileDetailsLoaded(fileDetails) {
+    if (!fileDetails || !fileDetails.id) {
+      showNoSelection();
+      return;
+    }
+
+    document.getElementById('no-selection-content').style.display = 'none';
+    document.getElementById('main-content').style.display = 'flex';
+
+    // Si le fichier sélectionné change
+    if (currentFileId !== fileDetails.id) {
+      currentFileId = fileDetails.id;
+      document.getElementById('doc-name').innerText = fileDetails.name;
+      document.getElementById('doc-status').innerText = fileDetails.status;
+      
+      const imgElement = document.getElementById('preview-img');
+      const loader = document.getElementById('preview-loader');
+      const debugSection = document.getElementById('debug-section');
+      const debugLog = document.getElementById('debug-log');
+      
+      imgElement.style.display = 'none';
+      debugSection.style.display = 'none';
+      
+      if (fileDetails.base64Image) {
+        loader.style.display = 'block';
+        imgElement.style.display = 'none';
+        imgElement.onload = () => {
+          loader.style.display = 'none';
+          imgElement.style.display = 'block';
+        };
+        imgElement.onerror = () => {
+          loader.style.display = 'none';
+          debugSection.style.display = 'block';
+          debugLog.innerText = `Échec du rendu HTML de l'image.\n\n${fileDetails.debugInfo || ''}`;
+        };
+        imgElement.src = fileDetails.base64Image;
+      } else {
+        loader.style.display = 'none';
+        imgElement.src = "";
+        debugSection.style.display = 'block';
+        debugLog.innerText = `Aucune image reçue du serveur.\n\n${fileDetails.debugInfo || 'Pas de log disponible.'}`;
+      }
+
+      // Synchroniser l'angle avec celui de la feuille et récupérer la rotation physique
+      physicalRotation = fileDetails.physicalRotation ? parseInt(fileDetails.physicalRotation, 10) : 0;
+      sheetAngle = fileDetails.angle !== "" ? parseInt(fileDetails.angle, 10) : 0;
+      selectAngle(sheetAngle);
+
+      // Afficher la suggestion d'angle si aucun angle n'est déjà choisi
+      const suggestionBox = document.getElementById('suggestion-box');
+      if (fileDetails.angle === "" && fileDetails.suggestedAngle && fileDetails.suggestedAngle !== 0) {
+        suggestionBox.style.display = 'block';
+        suggestionBox.innerHTML = `${getTxt('suggestionText')}<b>${fileDetails.suggestedAngle}°</b> <a href="#" id="apply-suggest-lnk" style="margin-left: 6px; font-weight: 600; color: var(--primary); text-decoration: underline;">${getTxt('suggestionApply')}</a>`;
+        document.getElementById('apply-suggest-lnk').onclick = (e) => {
+          e.preventDefault();
+          selectAngle(fileDetails.suggestedAngle);
+        };
+      } else {
+        suggestionBox.style.display = 'none';
+      }
+    } else {
+      // Si on est sur le même fichier, on vérifie si l'angle dans le sheet a changé en dehors de la sidebar
+      const newSheetAngle = fileDetails.angle !== "" ? parseInt(fileDetails.angle, 10) : 0;
+      if (sheetAngle !== newSheetAngle) {
+        sheetAngle = newSheetAngle;
+        selectAngle(sheetAngle);
+      }
+      // Mettre à jour le statut en temps réel
+      document.getElementById('doc-status').innerText = fileDetails.status;
+    }
+  }
+
+  function showNoSelection() {
+    currentFileId = null;
+    document.getElementById('main-content').style.display = 'none';
+    document.getElementById('no-selection-content').style.display = 'block';
+  }
+
+  function selectAngle(angle) {
+    selectedAngle = angle;
+    
+    // Mettre à jour le style des boutons
+    const angleButtons = document.querySelectorAll('.btn-angle');
+    angleButtons.forEach(btn => {
+      const btnAngle = parseInt(btn.getAttribute('data-angle'), 10);
+      if (btnAngle === angle) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+
+    // Appliquer la rotation visuelle CSS sur l'image (angle choisi uniquement)
+    const imgElement = document.getElementById('preview-img');
+    const totalRotation = angle % 360;
+    imgElement.style.transform = `rotate(${totalRotation}deg)`;
+
+    // Activer/Désactiver le bouton Enregistrer
+    const saveButton = document.getElementById('save-btn');
+    if (selectedAngle !== sheetAngle) {
+      saveButton.disabled = false;
+    } else {
+      saveButton.disabled = true;
+    }
+  }
+
+  // Applique l'angle choisi à la feuille avec chargement visible
+  function saveAngleToSheet() {
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) overlay.classList.add('show');
+
+    google.script.run
+      .withSuccessHandler(() => {
+        if (overlay) overlay.classList.remove('show');
+        sheetAngle = selectedAngle;
+        selectAngle(selectedAngle); // Réinitialise l'état du bouton enregistrer
+        showToast(getTxt('msgSaveSuccess'), 'success');
+      })
+      .withFailureHandler((err) => {
+        if (overlay) overlay.classList.remove('show');
+        showToast(getTxt('msgSaveError') + " : " + err.message, 'error');
+      })
+      .updateActiveRowAngle(selectedAngle === 0 ? "" : selectedAngle.toString());
+  }
+
+  function onApiError(err) {
+    console.error("Erreur de communication API :", err);
+    // On ne l'affiche pas dans un toast persistant pour éviter d'inonder l'utilisateur pendant le polling
+  }
+
+  // Affiche une notification toast style Android / Workspace
+  function showToast(message, type = 'success') {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+
+    toast.className = 'toast show ' + type;
+    toast.textContent = message;
+
+    setTimeout(() => {
+      toast.classList.remove('show');
+    }, 3500);
+  }
+</script>
